@@ -1,6 +1,4 @@
-export async function startSignalingServerSimplePeer(
-  serverOptions: { port?: number } // Make port optional
-) {
+export async function startSignalingServerSimplePeer(serverOptions = {}) { // Removed TS type annotations
   const { WebSocketServer } = await import('ws');
   
   const PORT = process.env.PORT || serverOptions.port || 3000; // Use Render's port
@@ -8,8 +6,8 @@ export async function startSignalingServerSimplePeer(
 
   console.log(`WebSocket server is running on port ${PORT}`);
 
-  const peerById = new Map<string, ServerPeer>();
-  const peersByRoom = new Map<string, Set<string>>();
+  const peerById = new Map(); // Removed generics for JavaScript
+  const peersByRoom = new Map(); // Removed generics for JavaScript
   let serverClosed = false;
 
   wss.on('close', () => {
@@ -20,7 +18,7 @@ export async function startSignalingServerSimplePeer(
 
   wss.on('connection', function (ws) {
       const peerId = randomToken(PEER_ID_LENGTH);
-      const peer: ServerPeer = {
+      const peer = {
           id: peerId,
           socket: ws,
           rooms: new Set(),
