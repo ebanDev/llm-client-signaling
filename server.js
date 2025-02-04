@@ -1,14 +1,4 @@
 const SIMPLE_PEER_PING_INTERVAL = 120000; // 2 minutes
-const PEER_ID_LENGTH = 12;
-
-function randomToken(length) {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    let token = '';
-    for (let i = 0; i < length; i++) {
-        token += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return token;
-}
 
 function promiseWait(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -68,15 +58,63 @@ export async function startSignalingServerSimplePeer(serverOptions = {}) {
     }
 
     wss.on('connection', function (ws) {
-        const peerId = randomToken(PEER_ID_LENGTH);
-        const peer = {
-            id: peerId,
-            socket: ws,
-            rooms: new Set(),
-            lastPing: Date.now(),
-        };
-        peerById.set(peerId, peer);
-        sendMessage(ws, { type: 'init', yourPeerId: peerId });
+        let peerId;
+        let peer;
+
+        ws.on('message', msgEvent => {
+            const message = JSON.parse(msgEvent.toString());
+            const type = message.type;
+
+            if (type === 'init') {
+                peerId = message.peerId;
+                peer = {
+                    id: peerId,
+                    socket: ws,
+                    rooms: new Set(),
+                    lastPing: Date.now(),
+                };
+                peerById.set(peerId, peer);
+                sendMessage(ws, { type: 'init', yourPeerId: peerId });
+            } else if (!peer) {
+                disconnectSocket(peerId, 'peer not initialized');
+                return;
+            } else {
+                peer.lastPing = Date.now();
+                switch (type) {
+                    case 'join': {
+                        const roomId = message.room;
+                        if (peer.rooms.has(roomId)) return;
+                        peer.rooms.add(roomId);
+                        const room = getFromMapOrCreate(peersByRoom, roomId, () => new Set());
+                        room.add(peerId);
+                        room.forEach(otherPeerId => {
+                            const otherPeer = peerById.get(otherPeerId);
+                            if (otherPeer) {
+                                sendMessage(otherPeer.socket, {
+                                    type: 'joined',
+                                    otherPeerIds: Array.from(room)
+                                });
+                            }
+                        });
+                        break;
+                    }
+                    case 'signal': {
+                        if (message.senderPeerId !== peerId) {
+                            disconnectSocket(peerId, 'spoofed sender');
+                            return;
+                        }
+                        const receiver = peerById.get(message.receiverPeerId);
+                        if (receiver) sendMessage(receiver.socket, message);
+                        break;
+                    }
+                    case 'ping':
+                        sendMessage(ws, { type: 'pong' });
+                        break;
+                    default:
+                        disconnectSocket(peerId, 'unknown message type ' + type);
+                }
+            }
+        });
 
         ws.on('error', err => {
             console.error('SERVER ERROR:');
@@ -85,49 +123,6 @@ export async function startSignalingServerSimplePeer(serverOptions = {}) {
         });
         ws.on('close', () => {
             disconnectSocket(peerId, 'socket disconnected');
-        });
-
-        ws.on('message', msgEvent => {
-            peer.lastPing = Date.now();
-            const message = JSON.parse(msgEvent.toString());
-            const type = message.type;
-            switch (type) {
-                case 'join': {
-                    const roomId = message.room;
-                    if (!validateIdString(roomId) || !validateIdString(peerId)) {
-                        disconnectSocket(peerId, 'invalid ids');
-                        return;
-                    }
-                    if (peer.rooms.has(roomId)) return;
-                    peer.rooms.add(roomId);
-                    const room = getFromMapOrCreate(peersByRoom, roomId, () => new Set());
-                    room.add(peerId);
-                    room.forEach(otherPeerId => {
-                        const otherPeer = peerById.get(otherPeerId);
-                        if (otherPeer) {
-                            sendMessage(otherPeer.socket, {
-                                type: 'joined',
-                                otherPeerIds: Array.from(room)
-                            });
-                        }
-                    });
-                    break;
-                }
-                case 'signal': {
-                    if (message.senderPeerId !== peerId) {
-                        disconnectSocket(peerId, 'spoofed sender');
-                        return;
-                    }
-                    const receiver = peerById.get(message.receiverPeerId);
-                    if (receiver) sendMessage(receiver.socket, message);
-                    break;
-                }
-                case 'ping':
-                    sendMessage(ws, { type: 'pong' });
-                    break;
-                default:
-                    disconnectSocket(peerId, 'unknown message type ' + type);
-            }
         });
     });
 
@@ -140,8 +135,4 @@ export async function startSignalingServerSimplePeer(serverOptions = {}) {
 
 function sendMessage(ws, message) {
     ws.send(JSON.stringify(message));
-}
-
-function validateIdString(id) {
-    return typeof id === 'string' && id.length > 5 && id.length < 100;
 }
