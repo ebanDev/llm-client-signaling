@@ -123,6 +123,7 @@ export async function startSignalingServerSimplePeer(serverOptions = {}) {
                     break;
                 }
                 case 'ping':
+                    sendMessage(ws, { type: 'pong' });
                     break;
                 default:
                     disconnectSocket(peerId, 'unknown message type ' + type);
